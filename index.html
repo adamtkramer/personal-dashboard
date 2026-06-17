@@ -178,6 +178,16 @@
     <div class="section-label">Visible widgets</div>
     <div id="widget-toggles"></div>
 
+    <div class="section-label">Appearance</div>
+    <div class="field">
+      <label>Accent color</label>
+      <div id="accent-swatches" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+    </div>
+    <div class="toggle-row">
+      <span>Auto dark/light by sunrise/sunset</span>
+      <label class="switch"><input type="checkbox" id="cfg-auto-theme"><span class="slider"></span></label>
+    </div>
+
     <div class="section-label">Portfolio</div>
     <div class="field">
       <label>Finnhub API key (live prices)</label>
@@ -220,7 +230,8 @@
 var DEFAULTS = {
   theme: "light",
   stockKey: "", gmailClientId: "", newsQ: "technology", newsKey: "", weatherCity: "Franklin, Tennessee",
-  visible: { stocks:true, email:true, calendar:true, news:true, weather:true, links:true },
+  accent: "", autoTheme: false, todos: [], notes: "",
+  visible: { stocks:true, email:true, calendar:true, news:true, weather:true, links:true, todo:true },
   links: [
     { name:"Gmail", url:"https://mail.google.com", color:"#ea4335" },
     { name:"GitHub", url:"https://github.com", color:"#24292f" },
@@ -257,8 +268,22 @@ function applyTheme(){
   document.documentElement.setAttribute("data-theme", S.theme);
   $("#theme-btn").textContent = S.theme === "dark" ? "☀️" : "🌙";
 }
+function applyAccent(){
+  if(S.accent){
+    document.documentElement.style.setProperty("--accent", S.accent);
+    document.documentElement.style.setProperty("--accent-soft", S.accent + "26");
+  }
+}
+var sunTimes = null;
+function applyAutoTheme(){
+  if(!S.autoTheme || !sunTimes) return;
+  var now = new Date(), sr = new Date(sunTimes.sunrise), ss = new Date(sunTimes.sunset);
+  var want = (now < sr || now > ss) ? "dark" : "light";
+  if(S.theme !== want){ S.theme = want; saveState(); applyTheme(); applyAccent(); }
+}
 $("#theme-btn").onclick = function(){ S.theme = S.theme === "dark" ? "light" : "dark"; saveState(); applyTheme(); };
 applyTheme();
+applyAccent();
 
 /* ===== WIDGET DEFS ===== */
 var WIDGETS = {
@@ -267,9 +292,10 @@ var WIDGETS = {
   calendar:{ title:"Upcoming",    icon:"📅", w:4, h:5, render:renderCalendar },
   news:    { title:"News",        icon:"📰", w:4, h:6, render:renderNews },
   weather: { title:"Weather",     icon:"🌤️", w:4, h:4, render:renderWeather },
-  links:   { title:"Quick Links", icon:"🔖", w:4, h:4, render:renderLinks }
+  links:   { title:"Quick Links", icon:"🔖", w:4, h:4, render:renderLinks },
+  todo:    { title:"To-Do & Notes", icon:"📝", w:4, h:5, render:renderTodo }
 };
-var ORDER = ["stocks","email","calendar","weather","news","links"];
+var ORDER = ["stocks","email","calendar","weather","news","links","todo"];
 
 var grid;
 function buildGrid(){
@@ -615,9 +641,13 @@ function renderWeather(){
         if(m) loc = m;
       }
       $("#meta-weather").textContent = loc.name + (loc.admin1 ? ", " + loc.admin1 : "");
-      return fetch("https://api.open-meteo.com/v1/forecast?latitude="+loc.latitude+"&longitude="+loc.longitude+"&current=temperature_2m,weather_code&hourly=temperature_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&timezone=auto&forecast_days=5").then(function(r){ return r.json(); });
+      return fetch("https://api.open-meteo.com/v1/forecast?latitude="+loc.latitude+"&longitude="+loc.longitude+"&current=temperature_2m,weather_code&hourly=temperature_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset&temperature_unit=fahrenheit&timezone=auto&forecast_days=5").then(function(r){ return r.json(); });
     })
-    .then(function(w){ weatherData = w; drawWeather(); })
+    .then(function(w){
+      weatherData = w;
+      if(w.daily && w.daily.sunrise){ sunTimes = { sunrise:w.daily.sunrise[0], sunset:w.daily.sunset[0] }; applyAutoTheme(); }
+      drawWeather();
+    })
     .catch(function(e){ body.innerHTML = '<div class="err">Weather error: '+escapeHtml(e.message)+'</div>'; });
 }
 
@@ -641,6 +671,41 @@ function renderLinks(){
     if(!/^https?:\/\//.test(url)) url = "https://"+url;
     S.links.push({ name:name, url:url, color: colorFor(name) }); saveState(); renderLinks();
   };
+}
+
+/* ===== TO-DO & NOTES (localStorage) ===== */
+function renderTodo(){
+  var body = $("#body-todo"); if(!body) return;
+  body.innerHTML =
+    '<input class="search" id="todo-input" placeholder="Add a task and press Enter…" style="margin-bottom:8px" />' +
+    '<div id="todo-list" style="margin-bottom:14px"></div>' +
+    '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Notes</div>' +
+    '<textarea id="todo-notes" placeholder="Quick notes…" style="width:100%;min-height:90px;resize:vertical;border:1px solid var(--border);border-radius:9px;background:var(--surface-2);color:var(--text);font:inherit;font-size:13px;padding:9px"></textarea>';
+  var list = $("#todo-list");
+  function drawList(){
+    var open = S.todos.filter(function(t){ return !t.done; }).length;
+    $("#meta-todo").textContent = open + (open===1?" open":" open");
+    list.innerHTML = S.todos.map(function(t,i){
+      return '<div class="row" style="padding:7px 0;gap:8px">'+
+        '<label style="display:flex;align-items:center;gap:8px;flex:1;cursor:pointer;min-width:0">'+
+          '<input type="checkbox" data-i="'+i+'" '+(t.done?'checked':'')+' style="width:16px;height:16px;flex:none">'+
+          '<span style="'+(t.done?'text-decoration:line-through;color:var(--text-dim)':'')+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+escapeHtml(t.text)+'</span>'+
+        '</label>'+
+        '<button data-del="'+i+'" class="btn icon" style="padding:2px 7px;font-size:12px">✕</button>'+
+      '</div>';
+    }).join("") || '<div class="muted">No tasks yet.</div>';
+    Array.prototype.forEach.call(list.querySelectorAll('input[type=checkbox]'), function(c){
+      c.onchange = function(){ S.todos[+c.dataset.i].done = c.checked; saveState(); drawList(); };
+    });
+    Array.prototype.forEach.call(list.querySelectorAll('button[data-del]'), function(b){
+      b.onclick = function(){ S.todos.splice(+b.dataset.del,1); saveState(); drawList(); };
+    });
+  }
+  drawList();
+  var inp = $("#todo-input");
+  inp.onkeydown = function(e){ if(e.key === "Enter" && inp.value.trim()){ S.todos.push({ text:inp.value.trim(), done:false }); inp.value=""; saveState(); drawList(); } };
+  var notes = $("#todo-notes"); notes.value = S.notes || "";
+  notes.oninput = function(){ S.notes = notes.value; saveState(); };
 }
 
 /* ===== REFRESH ===== */
@@ -668,6 +733,15 @@ function openDrawer(){
   Array.prototype.forEach.call(tg.querySelectorAll("input"), function(inp){
     inp.onchange = function(){ S.visible[inp.dataset.k] = inp.checked; saveState(); buildGrid(); };
   });
+  var sw = $("#accent-swatches"); sw.innerHTML = "";
+  ["#4f7cff","#9b6cff","#16a34a","#ea580c","#0891b2","#db2777","#e11d48","#f59e0b"].forEach(function(c){
+    var b = document.createElement("button");
+    b.style.cssText = "width:26px;height:26px;border-radius:50%;cursor:pointer;border:2px solid "+(((S.accent||"#4f7cff")===c)?"var(--text)":"transparent")+";background:"+c;
+    b.onclick = function(){ S.accent = c; saveState(); applyAccent(); openDrawer(); };
+    sw.appendChild(b);
+  });
+  var at = $("#cfg-auto-theme"); at.checked = !!S.autoTheme;
+  at.onchange = function(){ S.autoTheme = at.checked; saveState(); if(at.checked){ if(sunTimes) applyAutoTheme(); else if(S.visible.weather) renderWeather(); } };
   $("#overlay").classList.add("open"); $("#drawer").classList.add("open");
 }
 function closeDrawer(){ $("#overlay").classList.remove("open"); $("#drawer").classList.remove("open"); }
