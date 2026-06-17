@@ -208,9 +208,9 @@
       <input type="text" id="cfg-news-q" placeholder="technology" />
     </div>
     <div class="field">
-      <label>NewsAPI key</label>
-      <input type="password" id="cfg-news-key" placeholder="Leave blank for demo data" />
-      <div class="hint">Free key: newsapi.org/register (works on localhost only).</div>
+      <label>Guardian API key (optional)</label>
+      <input type="password" id="cfg-news-key" placeholder="Leave blank — live news works without a key" />
+      <div class="hint">News is live by default (no key needed). Add a free Guardian key (open-platform.theguardian.com/access) for higher-quality general news on your topic.</div>
     </div>
 
     <div class="section-label">Weather</div>
@@ -231,7 +231,7 @@ var DEFAULTS = {
   theme: "light",
   stockKey: "", gmailClientId: "", newsQ: "technology", newsKey: "", weatherCity: "Franklin, Tennessee",
   accent: "", autoTheme: false, todos: [], notes: "",
-  visible: { stocks:true, email:true, calendar:true, news:true, weather:true, links:true, todo:true },
+  visible: { stocks:true, email:true, calendar:true, news:true, weather:true, links:true, todo:true, golf:true },
   links: [
     { name:"Gmail", url:"https://mail.google.com", color:"#ea4335" },
     { name:"GitHub", url:"https://github.com", color:"#24292f" },
@@ -243,7 +243,14 @@ var DEFAULTS = {
 };
 var LS = "personal-dashboard-v1";
 var S = loadState();
-function loadState(){ try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(LS) || "{}")); } catch(e){ return Object.assign({}, DEFAULTS); } }
+function loadState(){
+  try {
+    var saved = JSON.parse(localStorage.getItem(LS) || "{}");
+    var s = Object.assign({}, DEFAULTS, saved);
+    s.visible = Object.assign({}, DEFAULTS.visible, saved.visible || {});
+    return s;
+  } catch(e){ return Object.assign({}, DEFAULTS); }
+}
 function saveState(){ localStorage.setItem(LS, JSON.stringify(S)); }
 
 /* ===== HELPERS ===== */
@@ -293,9 +300,10 @@ var WIDGETS = {
   news:    { title:"News",        icon:"📰", w:4, h:6, render:renderNews },
   weather: { title:"Weather",     icon:"🌤️", w:4, h:4, render:renderWeather },
   links:   { title:"Quick Links", icon:"🔖", w:4, h:4, render:renderLinks },
-  todo:    { title:"To-Do & Notes", icon:"📝", w:4, h:5, render:renderTodo }
+  todo:    { title:"To-Do & Notes", icon:"📝", w:4, h:5, render:renderTodo },
+  golf:    { title:"Golf Day", icon:"⛳", w:4, h:4, render:renderGolf }
 };
-var ORDER = ["stocks","email","calendar","weather","news","links","todo"];
+var ORDER = ["stocks","email","calendar","weather","golf","news","links","todo"];
 
 var grid;
 function buildGrid(){
@@ -556,27 +564,40 @@ var DEMO_NEWS = [
 ];
 function renderNews(){
   var body = $("#body-news"); if(!body) return;
-  $("#meta-news").textContent = S.newsKey ? "live" : "demo";
-  function finish(articles){
-    if(!articles || !articles.length){ $("#meta-news").textContent="demo"; articles = DEMO_NEWS; }
+  var topic = S.newsQ || "technology";
+  function show(articles, label){
+    if(!articles || !articles.length){ articles = DEMO_NEWS; label = "demo"; }
+    $("#meta-news").textContent = label;
     body.innerHTML = '<input class="search" id="news-search" placeholder="Filter headlines…" /><div id="news-list"></div>';
     var list = $("#news-list");
     function draw(q){
       q=(q||"").toLowerCase();
       list.innerHTML = articles.filter(function(a){ return a.title && a.title.toLowerCase().indexOf(q)>-1; })
-        .map(function(a){ return '<a class="news-item" href="'+escapeHtml(a.url)+'" target="_blank" rel="noopener">'+
-            '<div class="news-title">'+escapeHtml(a.title)+'</div><div class="news-src">'+escapeHtml(a.src)+'</div></a>'; }).join("")
+        .map(function(a){ return '<a class="news-item" href="'+escapeHtml(a.url||"#")+'" target="_blank" rel="noopener">'+
+            '<div class="news-title">'+escapeHtml(a.title)+'</div><div class="news-src">'+escapeHtml(a.src||"")+'</div></a>'; }).join("")
         || '<div class="muted">No matches.</div>';
     }
     draw("");
     $("#news-search").oninput = function(ev){ draw(ev.target.value); };
   }
-  if(S.newsKey){
-    fetch("https://newsapi.org/v2/everything?q="+encodeURIComponent(S.newsQ||"technology")+"&sortBy=publishedAt&pageSize=12&language=en&apiKey="+S.newsKey)
+  function hn(){
+    fetch("https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=12")
       .then(function(r){ return r.json(); })
-      .then(function(j){ if(j.status!=="ok") throw new Error(j.message||"request failed"); finish((j.articles||[]).map(function(a){ return { title:a.title, src:(a.source&&a.source.name)||"", url:a.url }; })); })
-      .catch(function(){ $("#meta-news").textContent="demo (API error)"; finish(null); });
-  } else { finish(null); }
+      .then(function(j){ show((j.hits||[]).filter(function(h){ return h.title; }).map(function(h){ return { title:h.title, src:"Hacker News", url:h.url || ("https://news.ycombinator.com/item?id="+h.objectID) }; }), "live"); })
+      .catch(function(){ show(null, "demo"); });
+  }
+  function gdelt(){
+    fetch("https://api.gdeltproject.org/api/v2/doc/doc?query="+encodeURIComponent(topic)+"&mode=artlist&maxrecords=12&format=json&sort=datedesc")
+      .then(function(r){ return r.json(); })
+      .then(function(j){ var arts=(j.articles||[]).map(function(a){ return { title:a.title, src:a.domain, url:a.url }; }); if(arts.length) show(arts, "live"); else hn(); })
+      .catch(function(){ hn(); });
+  }
+  if(S.newsKey){
+    fetch("https://content.guardianapis.com/search?q="+encodeURIComponent(topic)+"&order-by=newest&page-size=12&api-key="+S.newsKey)
+      .then(function(r){ return r.json(); })
+      .then(function(j){ var rs=(j.response&&j.response.results)||[]; if(!rs.length) throw new Error("none"); show(rs.map(function(a){ return { title:a.webTitle, src:a.sectionName, url:a.webUrl }; }), "live"); })
+      .catch(function(){ gdelt(); });
+  } else { gdelt(); }
 }
 
 /* ===== WEATHER (Open-Meteo, no key) ===== */
@@ -708,11 +729,55 @@ function renderTodo(){
   notes.oninput = function(){ S.notes = notes.value; saveState(); };
 }
 
+/* ===== GOLF DAY (Open-Meteo wind/rain/temp score) ===== */
+function renderGolf(){
+  var body = $("#body-golf"); if(!body) return;
+  body.innerHTML = '<div class="loading">Checking conditions…</div>';
+  var parts = String(S.weatherCity || "").split(",");
+  var city = parts[0].trim(), region = (parts[1] || "").trim().toLowerCase();
+  fetch("https://geocoding-api.open-meteo.com/v1/search?name="+encodeURIComponent(city)+"&count=10&language=en")
+    .then(function(r){ return r.json(); })
+    .then(function(g){
+      var rs = g.results || []; if(!rs.length) throw new Error("no location");
+      var loc = rs[0];
+      if(region){ var m = rs.filter(function(x){ return (x.admin1||"").toLowerCase().indexOf(region) > -1; })[0]; if(m) loc = m; }
+      $("#meta-golf").textContent = loc.name;
+      return fetch("https://api.open-meteo.com/v1/forecast?latitude="+loc.latitude+"&longitude="+loc.longitude+"&current=temperature_2m,weather_code,wind_speed_10m&daily=precipitation_probability_max&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto&forecast_days=1").then(function(r){ return r.json(); });
+    })
+    .then(function(w){
+      var temp = Math.round(w.current.temperature_2m), wind = Math.round(w.current.wind_speed_10m), code = w.current.weather_code;
+      var rain = (w.daily && w.daily.precipitation_probability_max) ? w.daily.precipitation_probability_max[0] : 0;
+      var score = 100;
+      if(temp<40 || temp>95) score-=50; else if(temp<55 || temp>90) score-=20; else if(temp<60 || temp>85) score-=8;
+      if(wind>22) score-=45; else if(wind>15) score-=25; else if(wind>10) score-=10;
+      score -= Math.min(45, rain*0.5);
+      if([65,67,75,82,86,95,96,99].indexOf(code)>-1) score-=45; else if([51,53,55,61,63,71,73,80,81].indexOf(code)>-1) score-=20;
+      score = Math.max(0, Math.min(100, Math.round(score)));
+      var verdict, color, emoji;
+      if(score>=80){ verdict="Great day for golf"; color="var(--green)"; emoji="⛳"; }
+      else if(score>=60){ verdict="Good — go play"; color="var(--green)"; emoji="🏌️"; }
+      else if(score>=40){ verdict="Playable, a bit iffy"; color="#ca8a04"; emoji="⛅"; }
+      else { verdict="Better skip it"; color="var(--red)"; emoji="🌧️"; }
+      var cond = (WCODE[code] || ["",""])[1] || "";
+      body.innerHTML =
+        '<div style="text-align:center;margin-bottom:12px">'+
+          '<div style="font-size:38px">'+emoji+'</div>'+
+          '<div style="font-size:18px;font-weight:800;color:'+color+'">'+verdict+'</div>'+
+          '<div class="muted">score '+score+'/100</div>'+
+        '</div>'+
+        '<div class="row"><span class="muted">Temperature</span><span style="font-weight:700">'+temp+'°</span></div>'+
+        '<div class="row"><span class="muted">Wind</span><span style="font-weight:700">'+wind+' mph</span></div>'+
+        '<div class="row"><span class="muted">Rain chance</span><span style="font-weight:700">'+rain+'%</span></div>'+
+        '<div class="row"><span class="muted">Conditions</span><span style="font-weight:700">'+escapeHtml(cond)+'</span></div>';
+    })
+    .catch(function(e){ body.innerHTML = '<div class="err">Golf forecast error: '+escapeHtml(e.message)+'</div>'; });
+}
+
 /* ===== REFRESH ===== */
-function refreshAll(){ ["stocks","email","calendar","news","weather"].forEach(function(k){ if(S.visible[k]) WIDGETS[k].render(); }); }
+function refreshAll(){ ["stocks","email","calendar","news","weather","golf"].forEach(function(k){ if(S.visible[k]) WIDGETS[k].render(); }); }
 $("#refresh-btn").onclick = refreshAll;
 setInterval(function(){ if(S.visible.stocks) renderStocks(); }, 60000);
-setInterval(function(){ if(S.visible.weather) renderWeather(); }, 600000);
+setInterval(function(){ if(S.visible.weather) renderWeather(); if(S.visible.golf) renderGolf(); }, 600000);
 setInterval(function(){ if(S.visible.news) renderNews(); }, 900000);
 setInterval(function(){ if(gmailToken){ if(S.visible.email) renderEmail(); if(S.visible.calendar) renderCalendar(); } }, 300000);
 
