@@ -180,9 +180,9 @@
 
     <div class="section-label">Portfolio</div>
     <div class="field">
-      <label>Alpha Vantage API key (live prices)</label>
+      <label>Finnhub API key (live prices)</label>
       <input type="password" id="cfg-stock-key" placeholder="Leave blank to use snapshot prices" />
-      <div class="hint">Free key: alphavantage.co/support/#api-key. Holdings &amp; cost basis are built in; the key just refreshes prices.</div>
+      <div class="hint">Free key: finnhub.io/register. Holdings &amp; cost basis are built in; the key refreshes stock/ETF prices intraday. Mutual funds (e.g. BPTRX) stay on snapshot.</div>
     </div>
 
     <div class="section-label">Gmail (live inbox)</div>
@@ -219,7 +219,7 @@
 /* ===== STATE ===== */
 var DEFAULTS = {
   theme: "light",
-  stockKey: "", gmailClientId: "", newsQ: "technology", newsKey: "", weatherCity: "San Francisco",
+  stockKey: "", gmailClientId: "", newsQ: "technology", newsKey: "", weatherCity: "Franklin, Tennessee",
   visible: { stocks:true, email:true, calendar:true, news:true, weather:true, links:true },
   links: [
     { name:"Gmail", url:"https://mail.google.com", color:"#ea4335" },
@@ -363,11 +363,11 @@ function renderStocks(){
   if(key){
     var prices={};
     Promise.all(symList.map(function(sym){
-      return fetch("https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol="+sym+"&apikey="+key)
+      return fetch("https://finnhub.io/api/v1/quote?symbol="+encodeURIComponent(sym)+"&token="+key)
         .then(function(r){ return r.json(); })
-        .then(function(j){ var q=j["Global Quote"]||{}; if(q["05. price"]) prices[sym]=+q["05. price"]; })
+        .then(function(j){ if(j && j.c > 0) prices[sym]=j.c; })
         .catch(function(){});
-    })).then(function(){ if(!Object.keys(prices).length) $("#meta-stocks").textContent="snapshot (API limit?)"; draw(prices); });
+    })).then(function(){ if(!Object.keys(prices).length) $("#meta-stocks").textContent="snapshot (check key)"; draw(prices); });
   } else { draw(null); }
 }
 
@@ -560,12 +560,20 @@ var WCODE = { 0:["☀️","Clear"],1:["🌤️","Mainly clear"],2:["⛅","Partly
   80:["🌦️","Showers"],81:["🌧️","Showers"],82:["⛈️","Violent showers"],95:["⛈️","Thunderstorm"],96:["⛈️","Thunderstorm"],99:["⛈️","Thunderstorm"] };
 function renderWeather(){
   var body = $("#body-weather"); if(!body) return;
-  fetch("https://geocoding-api.open-meteo.com/v1/search?name="+encodeURIComponent(S.weatherCity)+"&count=1")
+  var parts = String(S.weatherCity || "").split(",");
+  var cityName = parts[0].trim();
+  var region = (parts[1] || "").trim().toLowerCase();
+  fetch("https://geocoding-api.open-meteo.com/v1/search?name="+encodeURIComponent(cityName)+"&count=10&language=en")
     .then(function(r){ return r.json(); })
     .then(function(g){
-      if(!g.results || !g.results.length) throw new Error("city not found");
-      var loc = g.results[0];
-      $("#meta-weather").textContent = loc.name;
+      var results = g.results || [];
+      if(!results.length) throw new Error("city not found");
+      var loc = results[0];
+      if(region){
+        var m = results.filter(function(x){ return (x.admin1||"").toLowerCase().indexOf(region) > -1; })[0];
+        if(m) loc = m;
+      }
+      $("#meta-weather").textContent = loc.name + (loc.admin1 ? ", " + loc.admin1 : "");
       return fetch("https://api.open-meteo.com/v1/forecast?latitude="+loc.latitude+"&longitude="+loc.longitude+"&current=temperature_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&timezone=auto&forecast_days=5").then(function(r){ return r.json(); });
     })
     .then(function(w){
