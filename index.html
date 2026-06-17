@@ -6,6 +6,7 @@
 <title>Personal Dashboard</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack.min.css" />
 <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root {
     --bg: #f4f6fb;
@@ -82,6 +83,9 @@
   .stk-sym { font-weight: 700; }
   .stk-name { font-size: 11px; color: var(--text-dim); }
   .big { font-size: 22px; font-weight: 800; }
+  .acct-head { display: flex; justify-content: space-between; align-items: baseline; margin: 14px 0 2px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .acct-head .nm { font-weight: 700; font-size: 13px; }
+  .acct-head .val { font-weight: 700; font-size: 13px; }
   .cal-event { display: flex; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
   .cal-event:last-child { border-bottom: none; }
   .cal-date { flex: none; width: 46px; text-align: center; }
@@ -173,16 +177,21 @@
   <div class="drawer-body">
     <div class="section-label">Visible widgets</div>
     <div id="widget-toggles"></div>
-    <div class="section-label">Stocks</div>
+
+    <div class="section-label">Portfolio</div>
     <div class="field">
-      <label>Tickers (comma separated)</label>
-      <input type="text" id="cfg-stocks" placeholder="AAPL, MSFT, NVDA, TSLA" />
+      <label>Alpha Vantage API key (live prices)</label>
+      <input type="password" id="cfg-stock-key" placeholder="Leave blank to use snapshot prices" />
+      <div class="hint">Free key: alphavantage.co/support/#api-key. Holdings &amp; cost basis are built in; the key just refreshes prices.</div>
     </div>
+
+    <div class="section-label">Gmail (live inbox)</div>
     <div class="field">
-      <label>Alpha Vantage API key</label>
-      <input type="password" id="cfg-stock-key" placeholder="Leave blank for demo data" />
-      <div class="hint">Free key: alphavantage.co/support/#api-key</div>
+      <label>Google OAuth Client ID</label>
+      <input type="text" id="cfg-gmail-client" placeholder="xxxxx.apps.googleusercontent.com" />
+      <div class="hint">Create one in Google Cloud Console (OAuth client, Web app) with this site as an authorized JavaScript origin. Then click &ldquo;Connect Gmail&rdquo; in the Inbox widget.</div>
     </div>
+
     <div class="section-label">News</div>
     <div class="field">
       <label>Topic / search</label>
@@ -191,14 +200,16 @@
     <div class="field">
       <label>NewsAPI key</label>
       <input type="password" id="cfg-news-key" placeholder="Leave blank for demo data" />
-      <div class="hint">Free key: newsapi.org/register</div>
+      <div class="hint">Free key: newsapi.org/register (works on localhost only).</div>
     </div>
+
     <div class="section-label">Weather</div>
     <div class="field">
       <label>City</label>
       <input type="text" id="cfg-weather-city" placeholder="San Francisco" />
       <div class="hint">Powered by Open-Meteo &mdash; no key needed.</div>
     </div>
+
     <button class="btn primary block" id="cfg-save">Save &amp; refresh</button>
     <button class="btn block" id="cfg-reset">Reset layout</button>
   </div>
@@ -208,8 +219,7 @@
 /* ===== STATE ===== */
 var DEFAULTS = {
   theme: "light",
-  stocks: "AAPL,MSFT,NVDA,TSLA,AMZN",
-  stockKey: "", newsQ: "technology", newsKey: "", weatherCity: "San Francisco",
+  stockKey: "", gmailClientId: "", newsQ: "technology", newsKey: "", weatherCity: "San Francisco",
   visible: { stocks:true, email:true, calendar:true, news:true, weather:true, links:true },
   links: [
     { name:"Gmail", url:"https://mail.google.com", color:"#ea4335" },
@@ -230,6 +240,7 @@ function $(s, r){ return (r||document).querySelector(s); }
 var palette = ["#4f7cff","#9b6cff","#16a34a","#ea580c","#0891b2","#db2777","#ca8a04","#475569"];
 function colorFor(str){ var h=0; for(var i=0;i<str.length;i++){ h=(h*31+str.charCodeAt(i))%palette.length; } return palette[h]; }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, function(m){ return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]; }); }
+function money(n, d){ return "$"+Number(n).toLocaleString(undefined,{minimumFractionDigits:(d==null?2:d),maximumFractionDigits:(d==null?2:d)}); }
 
 /* ===== CLOCK ===== */
 function tick(){
@@ -251,7 +262,7 @@ applyTheme();
 
 /* ===== WIDGET DEFS ===== */
 var WIDGETS = {
-  stocks:  { title:"Portfolio",   icon:"📈", w:4, h:5, render:renderStocks },
+  stocks:  { title:"Portfolios",  icon:"📈", w:4, h:6, render:renderStocks },
   email:   { title:"Inbox",       icon:"✉️", w:4, h:5, render:renderEmail },
   calendar:{ title:"Upcoming",    icon:"📅", w:4, h:5, render:renderCalendar },
   news:    { title:"News",        icon:"📰", w:4, h:6, render:renderNews },
@@ -299,96 +310,162 @@ function persistLayout(){
   S.layout = map; saveState();
 }
 
-/* ===== STOCKS ===== */
-var DEMO_STOCKS = {
-  AAPL:{name:"Apple Inc.", price:228.52, chg:1.83}, MSFT:{name:"Microsoft", price:467.21, chg:0.94},
-  NVDA:{name:"NVIDIA", price:131.05, chg:-2.11}, TSLA:{name:"Tesla", price:342.69, chg:3.42},
-  AMZN:{name:"Amazon", price:212.34, chg:-0.58}, GOOGL:{name:"Alphabet", price:178.92, chg:1.12},
-  META:{name:"Meta", price:701.44, chg:2.05}, SPY:{name:"S&P 500 ETF", price:598.11, chg:0.41}
-};
+/* ===== PORTFOLIOS (real holdings; live prices via Alpha Vantage, snapshot fallback) ===== */
+var PORTFOLIOS = [
+  { name:"Individual", cash:209.61, holdings:[
+    { sym:"SPY",  shares:33.366, basis:12311.73, last:749.318 },
+    { sym:"UA",   shares:50,     basis:1004.88,  last:5.77 },
+    { sym:"BLNK", shares:150,    basis:7056.62,  last:0.6435 },
+    { sym:"RVP",  shares:54,     basis:393.59,   last:0.6765 }
+  ]},
+  { name:"Roth", cash:3953.80, holdings:[
+    { sym:"SPY",   shares:31.063, basis:15886.55, last:749.318 },
+    { sym:"LUV",   shares:200,    basis:6591.49,  last:47.695 },
+    { sym:"BPTRX", shares:15.215, basis:4000.00,  last:297.78 }
+  ]},
+  { name:"Sylvia's Roth", cash:3528.92, holdings:[
+    { sym:"SPYG", shares:30.321, basis:3499.95, last:118.76 }
+  ]}
+];
 function renderStocks(){
   var body = $("#body-stocks"); if(!body) return;
-  var syms = S.stocks.split(",").map(function(s){ return s.trim().toUpperCase(); }).filter(Boolean);
-  $("#meta-stocks").textContent = S.stockKey ? "live" : "demo";
-  function finish(data){
-    if(!data || !data.length){
-      $("#meta-stocks").textContent = "demo";
-      data = syms.map(function(sym){
-        var d = DEMO_STOCKS[sym] || {name:sym, price:100+Math.random()*200, chg:(Math.random()*6-3)};
-        return {sym:sym, name:d.name, price:d.price, chg:d.chg};
+  var key = S.stockKey;
+  $("#meta-stocks").textContent = key ? "live prices" : "snapshot";
+  var symSet = {}; PORTFOLIOS.forEach(function(a){ a.holdings.forEach(function(h){ symSet[h.sym]=1; }); });
+  var symList = Object.keys(symSet);
+
+  function draw(prices){
+    var grandVal=0, grandHold=0, grandBasis=0, html="";
+    PORTFOLIOS.forEach(function(a){
+      var sumVal=0, acctBasis=0, rows="";
+      a.holdings.forEach(function(h){
+        var px = (prices && prices[h.sym]) || h.last;
+        var val = h.shares*px, gain = val-h.basis, gpct = h.basis ? gain/h.basis*100 : 0;
+        sumVal += val; acctBasis += h.basis;
+        rows += '<div class="row"><div><span class="stk-sym">'+escapeHtml(h.sym)+'</span> <span class="stk-name">'+h.shares+' sh</span></div>'+
+          '<div style="text-align:right"><div>'+money(val)+'</div>'+
+          '<div class="'+(gain>=0?'up':'down')+'" style="font-size:12px;font-weight:700">'+(gain>=0?'+':'')+gpct.toFixed(2)+'%</div></div></div>';
       });
-    }
-    var total = data.reduce(function(a,d){ return a+d.price; }, 0);
-    var totChg = data.reduce(function(a,d){ return a+d.chg; }, 0) / data.length;
-    body.innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:10px">' +
-        '<div><div class="muted">Portfolio value (sample)</div><div class="big">$'+total.toLocaleString(undefined,{maximumFractionDigits:2})+'</div></div>' +
-        '<div class="'+(totChg>=0?'up':'down')+'" style="font-weight:700">'+(totChg>=0?'▲':'▼')+' '+Math.abs(totChg).toFixed(2)+'%</div>' +
-      '</div>' +
-      data.map(function(d){ return '<div class="row">' +
-          '<div><div class="stk-sym">'+escapeHtml(d.sym)+'</div><div class="stk-name">'+escapeHtml(d.name)+'</div></div>' +
-          '<div style="text-align:right">' +
-            '<div>$'+d.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+'</div>' +
-            '<div class="'+(d.chg>=0?'up':'down')+'" style="font-size:12px;font-weight:700">'+(d.chg>=0?'+':'')+d.chg.toFixed(2)+'%</div>' +
-          '</div></div>'; }).join("");
-  }
-  if(S.stockKey){
-    var picks = syms.slice(0,5);
-    Promise.all(picks.map(function(sym){
-      return fetch("https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol="+sym+"&apikey="+S.stockKey)
-        .then(function(r){ return r.json(); })
-        .then(function(j){ var q=j["Global Quote"]||{}; return q["05. price"] ? {sym:sym,name:sym,price:+q["05. price"],chg:parseFloat(q["10. change percent"])} : null; })
-        .catch(function(){ return null; });
-    })).then(function(res){
-      var data = res.filter(Boolean);
-      if(!data.length){ $("#meta-stocks").textContent="demo (API limit?)"; }
-      finish(data);
+      var acctVal = (a.cash||0)+sumVal, gAmt = sumVal-acctBasis, gPct = acctBasis ? gAmt/acctBasis*100 : 0;
+      grandVal += acctVal; grandHold += sumVal; grandBasis += acctBasis;
+      html += '<div class="acct-head"><span class="nm">'+escapeHtml(a.name)+'</span>'+
+        '<span class="val">'+money(acctVal,0)+' <span class="'+(gAmt>=0?'up':'down')+'">'+(gAmt>=0?'+':'')+gPct.toFixed(1)+'%</span></span></div>'+
+        rows;
     });
-  } else { finish(null); }
+    var gGain = grandHold-grandBasis, gPctAll = grandBasis ? gGain/grandBasis*100 : 0;
+    body.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:2px">'+
+        '<div><div class="muted">Total across accounts</div><div class="big">'+money(grandVal)+'</div></div>'+
+        '<div class="'+(gGain>=0?'up':'down')+'" style="font-weight:700;text-align:right">'+(gGain>=0?'+':'')+money(gGain,0)+'<br>'+(gGain>=0?'+':'')+gPctAll.toFixed(2)+'%</div>'+
+      '</div>' + html;
+  }
+
+  if(key){
+    var prices={};
+    Promise.all(symList.map(function(sym){
+      return fetch("https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol="+sym+"&apikey="+key)
+        .then(function(r){ return r.json(); })
+        .then(function(j){ var q=j["Global Quote"]||{}; if(q["05. price"]) prices[sym]=+q["05. price"]; })
+        .catch(function(){});
+    })).then(function(){ if(!Object.keys(prices).length) $("#meta-stocks").textContent="snapshot (API limit?)"; draw(prices); });
+  } else { draw(null); }
 }
 
-/* ===== EMAIL (mock) ===== */
+/* ===== EMAIL — live Gmail (GIS OAuth) with demo fallback ===== */
 var DEMO_EMAIL = [
   { from:"Sarah Chen", subj:"Q3 budget review — need your sign-off", time:"9:14 AM", unread:true, priority:true },
   { from:"GitHub", subj:"[dashboard] 3 new pull requests", time:"8:02 AM", unread:true, priority:false },
   { from:"Marcus Lee", subj:"Re: Offsite logistics", time:"Yesterday", unread:true, priority:false },
   { from:"Stripe", subj:"Your June payout is on the way", time:"Yesterday", unread:false, priority:false },
   { from:"Linda Park", subj:"URGENT: client demo moved to 2pm", time:"Yesterday", unread:true, priority:true },
-  { from:"Notion", subj:"Weekly digest: 12 pages updated", time:"Mon", unread:false, priority:false },
-  { from:"Recruiter", subj:"Senior role at Acme — quick chat?", time:"Mon", unread:true, priority:false }
+  { from:"Notion", subj:"Weekly digest: 12 pages updated", time:"Mon", unread:false, priority:false }
 ];
-function renderEmail(){
-  var body = $("#body-email"); if(!body) return;
-  var unread = DEMO_EMAIL.filter(function(e){ return e.unread; }).length;
-  var priority = DEMO_EMAIL.filter(function(e){ return e.priority; }).length;
-  $("#meta-email").textContent = "demo";
-  body.innerHTML =
+var gmailToken = (function(){ try { return sessionStorage.getItem("gmailToken") || null; } catch(e){ return null; } })();
+var gmailTokenClient = null;
+function gmailConnect(){
+  if(!S.gmailClientId){ alert("Add your Google OAuth Client ID in Settings → Gmail first."); openDrawer(); return; }
+  if(!(window.google && google.accounts && google.accounts.oauth2)){ alert("Google sign-in library is still loading — try again in a few seconds."); return; }
+  if(!gmailTokenClient){
+    gmailTokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: S.gmailClientId,
+      scope: "https://www.googleapis.com/auth/gmail.readonly",
+      callback: function(resp){ if(resp && resp.access_token){ gmailToken = resp.access_token; try{ sessionStorage.setItem("gmailToken", gmailToken); }catch(e){} renderEmail(); } }
+    });
+  }
+  gmailTokenClient.requestAccessToken({ prompt: "" });
+}
+function gmailDisconnect(){ gmailToken=null; try{ sessionStorage.removeItem("gmailToken"); }catch(e){} renderEmail(); }
+function gmailApi(path){
+  return fetch("https://gmail.googleapis.com/gmail/v1/users/me/"+path, { headers:{ Authorization:"Bearer "+gmailToken } })
+    .then(function(r){ if(r.status===401||r.status===403){ gmailToken=null; try{sessionStorage.removeItem("gmailToken");}catch(e){} throw new Error("session expired — reconnect"); } return r.json(); });
+}
+function emailListHtml(emails, unread, priority, live, extraTop){
+  return (extraTop||"") +
     '<input class="search" id="email-search" placeholder="Search inbox…" />' +
-    '<div style="display:flex;gap:8px;margin-bottom:8px">' +
+    '<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">' +
       '<span class="pill" style="background:var(--accent-soft);color:var(--accent)">'+unread+' unread</span>' +
       '<span class="pill">'+priority+' priority</span>' +
+      (live?'<span class="pill" style="margin-left:auto;cursor:pointer" id="gmail-disc">disconnect</span>':'') +
     '</div><div id="email-list"></div>';
+}
+function wireEmail(emails){
   var list = $("#email-list");
   function draw(q){
-    q = (q||"").toLowerCase();
-    var items = DEMO_EMAIL.filter(function(e){ return (e.from+e.subj).toLowerCase().indexOf(q) > -1; });
-    list.innerHTML = items.map(function(e){ return '<div class="row" style="align-items:flex-start">' +
-        '<div class="avatar" style="background:'+colorFor(e.from)+'">'+escapeHtml(e.from[0])+'</div>' +
-        '<div style="flex:1;min-width:0">' +
-          '<div style="display:flex;justify-content:space-between;gap:6px">' +
-            '<span style="font-weight:'+(e.unread?'700':'500')+'">'+escapeHtml(e.from)+'</span>' +
-            '<span class="muted" style="flex:none">'+escapeHtml(e.time)+'</span>' +
-          '</div>' +
-          '<div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' +
-            (e.priority?'<span style="color:var(--red)">●</span> ':'')+escapeHtml(e.subj) +
-          '</div>' +
+    q=(q||"").toLowerCase();
+    var items = emails.filter(function(e){ return (e.from+e.subj).toLowerCase().indexOf(q)>-1; });
+    list.innerHTML = items.map(function(e){ return '<div class="row" style="align-items:flex-start">'+
+        '<div class="avatar" style="background:'+colorFor(e.from)+'">'+escapeHtml((e.from[0]||"?").toUpperCase())+'</div>'+
+        '<div style="flex:1;min-width:0">'+
+          '<div style="display:flex;justify-content:space-between;gap:6px">'+
+            '<span style="font-weight:'+(e.unread?'700':'500')+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+escapeHtml(e.from)+'</span>'+
+            '<span class="muted" style="flex:none">'+escapeHtml(e.time||"")+'</span>'+
+          '</div>'+
+          '<div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+
+            (e.priority?'<span style="color:var(--red)">●</span> ':'')+escapeHtml(e.subj)+
+          '</div>'+
         '</div></div>'; }).join("") || '<div class="muted">No matches.</div>';
   }
   draw("");
   $("#email-search").oninput = function(ev){ draw(ev.target.value); };
 }
+function renderEmail(){
+  var body = $("#body-email"); if(!body) return;
+  if(!gmailToken){
+    $("#meta-email").textContent = "demo";
+    body.innerHTML = emailListHtml(DEMO_EMAIL, DEMO_EMAIL.filter(function(e){return e.unread;}).length, DEMO_EMAIL.filter(function(e){return e.priority;}).length, false,
+      '<button class="btn primary block" id="gmail-connect" style="margin-bottom:12px">Connect Gmail</button>');
+    wireEmail(DEMO_EMAIL);
+    var cb=$("#gmail-connect"); if(cb) cb.onclick = gmailConnect;
+    return;
+  }
+  $("#meta-email").textContent = "live";
+  body.innerHTML = '<div class="loading">Loading your inbox…</div>';
+  Promise.all([ gmailApi("labels/INBOX"), gmailApi("messages?maxResults=12&q="+encodeURIComponent("in:inbox is:unread")) ])
+    .then(function(res){
+      var label=res[0]||{}, listing=res[1]||{};
+      var ids=(listing.messages||[]).map(function(m){ return m.id; });
+      return Promise.all(ids.map(function(id){ return gmailApi("messages/"+id+"?format=metadata&metadataHeaders=From&metadataHeaders=Subject"); }))
+        .then(function(msgs){ return { label:label, msgs:msgs }; });
+    })
+    .then(function(d){
+      var unread = (d.label && d.label.messagesUnread!=null) ? d.label.messagesUnread : d.msgs.length;
+      var emails = d.msgs.map(function(m){
+        var hs=(m.payload && m.payload.headers)||[];
+        function h(n){ for(var i=0;i<hs.length;i++){ if(hs[i].name.toLowerCase()===n) return hs[i].value; } return ""; }
+        var from=h("from"); var name=from.replace(/<[^>]*>/,"").replace(/"/g,"").trim() || from;
+        return { from:name||"(unknown)", subj:h("subject")||"(no subject)", time:"", unread:true, priority:(m.labelIds||[]).indexOf("IMPORTANT")>-1 };
+      });
+      body.innerHTML = emailListHtml(emails, unread, emails.filter(function(e){return e.priority;}).length, true, "");
+      wireEmail(emails);
+      var db=$("#gmail-disc"); if(db) db.onclick = gmailDisconnect;
+    })
+    .catch(function(e){
+      body.innerHTML = '<div class="err">Gmail: '+escapeHtml(e.message)+'</div><button class="btn block" id="gmail-reconnect" style="margin-top:10px">Reconnect Gmail</button>';
+      var rb=$("#gmail-reconnect"); if(rb) rb.onclick = gmailConnect;
+    });
+}
 
-/* ===== CALENDAR (hardcoded) ===== */
+/* ===== CALENDAR (hardcoded sample) ===== */
 function renderCalendar(){
   var body = $("#body-calendar"); if(!body) return;
   $("#meta-calendar").textContent = "next 7 days";
@@ -404,10 +481,10 @@ function renderCalendar(){
   ];
   body.innerHTML = seed.map(function(ev){
     var d = new Date(today); d.setDate(d.getDate()+ev.off);
-    return '<div class="cal-event">' +
-        '<div class="cal-date"><div class="d">'+d.getDate()+'</div><div class="m">'+d.toLocaleDateString([], {month:'short'})+'</div></div>' +
-        '<div class="cal-bar" style="background:'+ev.color+'"></div>' +
-        '<div><div style="font-weight:600;font-size:13px">'+escapeHtml(ev.title)+'</div><div class="muted">'+escapeHtml(ev.time)+'</div></div>' +
+    return '<div class="cal-event">'+
+        '<div class="cal-date"><div class="d">'+d.getDate()+'</div><div class="m">'+d.toLocaleDateString([], {month:'short'})+'</div></div>'+
+        '<div class="cal-bar" style="background:'+ev.color+'"></div>'+
+        '<div><div style="font-weight:600;font-size:13px">'+escapeHtml(ev.title)+'</div><div class="muted">'+escapeHtml(ev.time)+'</div></div>'+
       '</div>';
   }).join("");
 }
@@ -429,9 +506,9 @@ function renderNews(){
     body.innerHTML = '<input class="search" id="news-search" placeholder="Filter headlines…" /><div id="news-list"></div>';
     var list = $("#news-list");
     function draw(q){
-      q = (q||"").toLowerCase();
-      list.innerHTML = articles.filter(function(a){ return a.title && a.title.toLowerCase().indexOf(q) > -1; })
-        .map(function(a){ return '<a class="news-item" href="'+escapeHtml(a.url)+'" target="_blank" rel="noopener">' +
+      q=(q||"").toLowerCase();
+      list.innerHTML = articles.filter(function(a){ return a.title && a.title.toLowerCase().indexOf(q)>-1; })
+        .map(function(a){ return '<a class="news-item" href="'+escapeHtml(a.url)+'" target="_blank" rel="noopener">'+
             '<div class="news-title">'+escapeHtml(a.title)+'</div><div class="news-src">'+escapeHtml(a.src)+'</div></a>'; }).join("")
         || '<div class="muted">No matches.</div>';
     }
@@ -441,10 +518,7 @@ function renderNews(){
   if(S.newsKey){
     fetch("https://newsapi.org/v2/everything?q="+encodeURIComponent(S.newsQ||"technology")+"&sortBy=publishedAt&pageSize=12&language=en&apiKey="+S.newsKey)
       .then(function(r){ return r.json(); })
-      .then(function(j){
-        if(j.status !== "ok") throw new Error(j.message||"request failed");
-        finish((j.articles||[]).map(function(a){ return { title:a.title, src:(a.source&&a.source.name)||"", url:a.url }; }));
-      })
+      .then(function(j){ if(j.status!=="ok") throw new Error(j.message||"request failed"); finish((j.articles||[]).map(function(a){ return { title:a.title, src:(a.source&&a.source.name)||"", url:a.url }; })); })
       .catch(function(){ $("#meta-news").textContent="demo (API error)"; finish(null); });
   } else { finish(null); }
 }
@@ -466,14 +540,14 @@ function renderWeather(){
     })
     .then(function(w){
       var cur = w.current; var code = WCODE[cur.weather_code] || ["❓","—"];
-      var html = '<div class="weather-now"><div class="ico">'+code[0]+'</div>' +
-        '<div><div class="temp">'+Math.round(cur.temperature_2m)+'°</div><div class="muted">'+code[1]+'</div></div></div>' +
+      var html = '<div class="weather-now"><div class="ico">'+code[0]+'</div>'+
+        '<div><div class="temp">'+Math.round(cur.temperature_2m)+'°</div><div class="muted">'+code[1]+'</div></div></div>'+
         '<div class="weather-days">';
       for(var i=0;i<w.daily.time.length;i++){
         var dc = WCODE[w.daily.weather_code[i]] || ["❓"];
         var day = new Date(w.daily.time[i]).toLocaleDateString([], {weekday:'short'});
-        html += '<div class="weather-day"><div>'+escapeHtml(day)+'</div><div class="e">'+dc[0]+'</div>' +
-          '<div style="font-weight:700">'+Math.round(w.daily.temperature_2m_max[i])+'°</div>' +
+        html += '<div class="weather-day"><div>'+escapeHtml(day)+'</div><div class="e">'+dc[0]+'</div>'+
+          '<div style="font-weight:700">'+Math.round(w.daily.temperature_2m_max[i])+'°</div>'+
           '<div class="muted">'+Math.round(w.daily.temperature_2m_min[i])+'°</div></div>';
       }
       body.innerHTML = html + '</div>';
@@ -486,10 +560,10 @@ function renderLinks(){
   var body = $("#body-links"); if(!body) return;
   $("#meta-links").textContent = String(S.links.length);
   body.innerHTML = '<div class="links-grid">' +
-    S.links.map(function(l,i){ return '<a class="link-tile" href="'+escapeHtml(l.url)+'" target="_blank" rel="noopener">' +
-        '<button class="link-del" data-i="'+i+'" title="Remove">✕</button>' +
-        '<span class="fav" style="background:'+(l.color||colorFor(l.name))+'">'+escapeHtml(l.name[0]||'?')+'</span>' +
-        escapeHtml(l.name) + '</a>'; }).join("") +
+    S.links.map(function(l,i){ return '<a class="link-tile" href="'+escapeHtml(l.url)+'" target="_blank" rel="noopener">'+
+        '<button class="link-del" data-i="'+i+'" title="Remove">✕</button>'+
+        '<span class="fav" style="background:'+(l.color||colorFor(l.name))+'">'+escapeHtml(l.name[0]||'?')+'</span>'+
+        escapeHtml(l.name)+'</a>'; }).join("") +
     '<div class="link-tile add-link" id="add-link"><span class="fav" style="background:var(--text-dim)">＋</span>Add</div>' +
     '</div>';
   Array.prototype.forEach.call(body.querySelectorAll(".link-del"), function(b){
@@ -504,22 +578,24 @@ function renderLinks(){
 }
 
 /* ===== REFRESH ===== */
-function refreshAll(){ ["stocks","news","weather"].forEach(function(k){ if(S.visible[k]) WIDGETS[k].render(); }); }
+function refreshAll(){ ["stocks","email","news","weather"].forEach(function(k){ if(S.visible[k]) WIDGETS[k].render(); }); }
 $("#refresh-btn").onclick = refreshAll;
 setInterval(function(){ if(S.visible.stocks) renderStocks(); }, 60000);
 setInterval(function(){ if(S.visible.weather) renderWeather(); }, 600000);
 setInterval(function(){ if(S.visible.news) renderNews(); }, 900000);
+setInterval(function(){ if(S.visible.email && gmailToken) renderEmail(); }, 300000);
 
 /* ===== SETTINGS DRAWER ===== */
 function openDrawer(){
-  $("#cfg-stocks").value = S.stocks; $("#cfg-stock-key").value = S.stockKey;
+  $("#cfg-stock-key").value = S.stockKey;
+  $("#cfg-gmail-client").value = S.gmailClientId;
   $("#cfg-news-q").value = S.newsQ; $("#cfg-news-key").value = S.newsKey;
   $("#cfg-weather-city").value = S.weatherCity;
   var tg = $("#widget-toggles"); tg.innerHTML = "";
   ORDER.forEach(function(key){
     var def = WIDGETS[key];
     var row = document.createElement("div"); row.className = "toggle-row";
-    row.innerHTML = '<span>'+def.icon+' '+def.title+'</span>' +
+    row.innerHTML = '<span>'+def.icon+' '+def.title+'</span>'+
       '<label class="switch"><input type="checkbox" data-k="'+key+'" '+(S.visible[key]?'checked':'')+'><span class="slider"></span></label>';
     tg.appendChild(row);
   });
@@ -533,8 +609,8 @@ $("#settings-btn").onclick = openDrawer;
 $("#drawer-close").onclick = closeDrawer;
 $("#overlay").onclick = closeDrawer;
 $("#cfg-save").onclick = function(){
-  S.stocks = $("#cfg-stocks").value || DEFAULTS.stocks;
   S.stockKey = $("#cfg-stock-key").value.trim();
+  S.gmailClientId = $("#cfg-gmail-client").value.trim();
   S.newsQ = $("#cfg-news-q").value || DEFAULTS.newsQ;
   S.newsKey = $("#cfg-news-key").value.trim();
   S.weatherCity = $("#cfg-weather-city").value || DEFAULTS.weatherCity;
