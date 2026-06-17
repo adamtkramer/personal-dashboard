@@ -388,8 +388,8 @@ function gmailConnect(){
   if(!gmailTokenClient){
     gmailTokenClient = google.accounts.oauth2.initTokenClient({
       client_id: S.gmailClientId,
-      scope: "https://www.googleapis.com/auth/gmail.readonly",
-      callback: function(resp){ if(resp && resp.access_token){ gmailToken = resp.access_token; try{ sessionStorage.setItem("gmailToken", gmailToken); }catch(e){} renderEmail(); } }
+      scope: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly",
+      callback: function(resp){ if(resp && resp.access_token){ gmailToken = resp.access_token; try{ sessionStorage.setItem("gmailToken", gmailToken); }catch(e){} renderEmail(); if(S.visible.calendar) renderCalendar(); } }
     });
   }
   gmailTokenClient.requestAccessToken({ prompt: "" });
@@ -465,10 +465,11 @@ function renderEmail(){
     });
 }
 
-/* ===== CALENDAR (hardcoded sample) ===== */
-function renderCalendar(){
+/* ===== CALENDAR — live Google Calendar (shared Google token) with sample fallback ===== */
+function calColor(s){ s=s||"e"; return palette[Math.abs(s.length*7 + s.charCodeAt(0)) % palette.length]; }
+function renderCalendarSample(showConnect){
   var body = $("#body-calendar"); if(!body) return;
-  $("#meta-calendar").textContent = "next 7 days";
+  $("#meta-calendar").textContent = showConnect ? "sample" : "next 7 days";
   var today = new Date();
   var seed = [
     { off:0, time:"2:00 PM", title:"Client demo (moved up)", color:"#dc2626" },
@@ -479,7 +480,8 @@ function renderCalendar(){
     { off:4, time:"6:00 PM", title:"Team offsite dinner", color:"#9b6cff" },
     { off:6, time:"11:00 AM", title:"Board prep", color:"#db2777" }
   ];
-  body.innerHTML = seed.map(function(ev){
+  var html = showConnect ? '<button class="btn primary block" id="cal-connect" style="margin-bottom:12px">Connect Google Calendar</button>' : '';
+  html += seed.map(function(ev){
     var d = new Date(today); d.setDate(d.getDate()+ev.off);
     return '<div class="cal-event">'+
         '<div class="cal-date"><div class="d">'+d.getDate()+'</div><div class="m">'+d.toLocaleDateString([], {month:'short'})+'</div></div>'+
@@ -487,6 +489,34 @@ function renderCalendar(){
         '<div><div style="font-weight:600;font-size:13px">'+escapeHtml(ev.title)+'</div><div class="muted">'+escapeHtml(ev.time)+'</div></div>'+
       '</div>';
   }).join("");
+  body.innerHTML = html;
+  var cb = $("#cal-connect"); if(cb) cb.onclick = gmailConnect;
+}
+function renderCalendar(){
+  var body = $("#body-calendar"); if(!body) return;
+  if(!gmailToken){ renderCalendarSample(true); return; }
+  $("#meta-calendar").textContent = "live";
+  body.innerHTML = '<div class="loading">Loading events…</div>';
+  var tMin = new Date().toISOString();
+  var tMax = new Date(Date.now() + 7*86400000).toISOString();
+  fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&maxResults=15&timeMin="+encodeURIComponent(tMin)+"&timeMax="+encodeURIComponent(tMax), { headers:{ Authorization:"Bearer "+gmailToken } })
+    .then(function(r){ if(r.status===401||r.status===403) throw new Error("reconnect"); return r.json(); })
+    .then(function(j){
+      var items = j.items || [];
+      if(!items.length){ body.innerHTML = '<div class="muted">No events in the next 7 days.</div>'; return; }
+      body.innerHTML = items.map(function(ev){
+        var s = ev.start || {};
+        var allDay = !s.dateTime;
+        var d = new Date(s.dateTime || (s.date + "T00:00:00"));
+        var time = allDay ? "All day" : d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+        return '<div class="cal-event">'+
+            '<div class="cal-date"><div class="d">'+d.getDate()+'</div><div class="m">'+d.toLocaleDateString([], {month:'short'})+'</div></div>'+
+            '<div class="cal-bar" style="background:'+calColor(ev.summary)+'"></div>'+
+            '<div><div style="font-weight:600;font-size:13px">'+escapeHtml(ev.summary||"(no title)")+'</div><div class="muted">'+escapeHtml(time)+(ev.location?' · '+escapeHtml(ev.location):'')+'</div></div>'+
+          '</div>';
+      }).join("");
+    })
+    .catch(function(){ renderCalendarSample(true); });
 }
 
 /* ===== NEWS ===== */
@@ -578,12 +608,12 @@ function renderLinks(){
 }
 
 /* ===== REFRESH ===== */
-function refreshAll(){ ["stocks","email","news","weather"].forEach(function(k){ if(S.visible[k]) WIDGETS[k].render(); }); }
+function refreshAll(){ ["stocks","email","calendar","news","weather"].forEach(function(k){ if(S.visible[k]) WIDGETS[k].render(); }); }
 $("#refresh-btn").onclick = refreshAll;
 setInterval(function(){ if(S.visible.stocks) renderStocks(); }, 60000);
 setInterval(function(){ if(S.visible.weather) renderWeather(); }, 600000);
 setInterval(function(){ if(S.visible.news) renderNews(); }, 900000);
-setInterval(function(){ if(S.visible.email && gmailToken) renderEmail(); }, 300000);
+setInterval(function(){ if(gmailToken){ if(S.visible.email) renderEmail(); if(S.visible.calendar) renderCalendar(); } }, 300000);
 
 /* ===== SETTINGS DRAWER ===== */
 function openDrawer(){
