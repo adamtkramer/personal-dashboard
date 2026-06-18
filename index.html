@@ -143,6 +143,19 @@
   .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   .btn.primary:hover { opacity: .9; color: #fff; }
   a { color: var(--accent); }
+  @media (max-width: 768px){
+    header { padding: 12px 14px; gap: 10px; }
+    .brand h1 { font-size: 16px; }
+    .clock .time { font-size: 20px; }
+    .clock .date { font-size: 11px; }
+    .header-actions .btn { padding: 8px 10px; font-size: 13px; }
+    .grid-stack { margin: 8px; }
+    .widget-head { padding: 13px 15px; }
+    .widget-body { padding: 13px 15px; }
+    .drawer { width: 100%; max-width: 100%; }
+    .big { font-size: 24px; }
+    .news-title, .stk-sym, .row { font-size: 14px; }
+  }
 </style>
 </head>
 <body>
@@ -309,7 +322,7 @@ var grid;
 function buildGrid(){
   if(grid){ grid.destroy(false); }
   $("#grid").innerHTML = "";
-  grid = GridStack.init({ cellHeight: 70, margin: 8, float: true, handle: ".widget-head" }, "#grid");
+  grid = GridStack.init({ cellHeight: 70, margin: 8, float: true, handle: ".widget-head", columnOpts: { breakpointForWindow: true, breakpoints: [{ w: 768, c: 1 }] } }, "#grid");
   var saved = S.layout || {};
   grid.batchUpdate();
   ORDER.forEach(function(key){
@@ -339,6 +352,7 @@ function buildGrid(){
   grid.on("change", persistLayout);
 }
 function persistLayout(){
+  if(grid.getColumn && grid.getColumn() !== 12) return; // don't overwrite desktop layout while collapsed on mobile
   var map = {};
   grid.engine.nodes.forEach(function(n){ map[n.id] = { x:n.x, y:n.y, w:n.w, h:n.h }; });
   S.layout = map; saveState();
